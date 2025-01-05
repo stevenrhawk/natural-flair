@@ -1,12 +1,12 @@
 {
-  "domain": "flair",
-  "name": "Flair",
+  "domain": "naturalflair",
+  "name": "Natural Flair",
   "codeowners": [
-    "@RobertD502"
+    "@stevenrhawk"
   ],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/RobertD502/home-assistant-flair/blob/main/README.md",
+  "documentation": "https://github.com/stevenrhawk/natural-flair/blob/main/README.md",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/RobertD502/home-assistant-flair/issues",
