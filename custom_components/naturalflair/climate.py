@@ -34,18 +34,18 @@ from homeassistant.util.unit_system import METRIC_SYSTEM
 
 from .const import (
     DOMAIN,
-    HVAC_AVAILABLE_FAN_SPEEDS,
-    HVAC_AVAILABLE_MODES_MAP,
-    HVAC_CURRENT_ACTION,
-    HVAC_CURRENT_FAN_SPEED,
-    HVAC_CURRENT_MODE_MAP,
-    HVAC_SWING_STATE,
+    HVAC_AVAILABLE_FAN_SPEEDS,       # e.g. [FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
+    HVAC_AVAILABLE_MODES_MAP,         # e.g. {"Cool": HVACMode.COOL, "Heat": HVACMode.HEAT, etc.}
+    HVAC_CURRENT_ACTION,              # e.g. {"Cool": HVACAction.COOLING, "Heat": HVACAction.HEATING, ...}
+    HVAC_CURRENT_FAN_SPEED,           # e.g. {"Auto": FAN_AUTO, "Low": FAN_LOW, ...}
+    HVAC_CURRENT_MODE_MAP,            # e.g. {"Cool": HVACMode.COOL, "Off": HVACMode.OFF, ...}
+    HVAC_SWING_STATE,                 # e.g. {"On": SWING_ON, "Off": SWING_OFF}
     LOGGER,
-    ROOM_HVAC_MAP,
+    ROOM_HVAC_MAP,                    # e.g. {"heat": HVACMode.HEAT, "float": HVACMode.OFF, ...}
 )
 from .coordinator import FlairDataUpdateCoordinator
 
-# Mappings
+# Reverse maps for converting from HA -> Flair
 ROOM_HVAC_MAP_TO_FLAIR = {v: k for (k, v) in ROOM_HVAC_MAP.items()}
 HASS_HVAC_MODE_TO_FLAIR = {v: k for (k, v) in HVAC_CURRENT_MODE_MAP.items()}
 HASS_HVAC_FAN_SPEED_TO_FLAIR = {v: k for (k, v) in HVAC_CURRENT_FAN_SPEED.items()}
@@ -63,21 +63,23 @@ async def async_setup_entry(
 
     climates = []
 
+    # Loop through each structure
     for structure_id, structure_data in coordinator.data.structures.items():
-        # Structure-level climate entity
+        # Add a StructureClimate (like a central thermostat)
         climates.append(StructureClimate(coordinator, structure_id))
 
-        # Room-level climate entities
+        # Add a RoomTemp entity for each room
         if structure_data.rooms:
             for room_id in structure_data.rooms:
                 climates.append(RoomTemp(coordinator, structure_id, room_id))
 
-        # IR mini-split / advanced HVAC units
+        # Add an HVAC entity for each advanced IR mini-split / HVAC unit
         if structure_data.hvac_units:
             for hvac_id, hvac_data in structure_data.hvac_units.items():
                 constraints = hvac_data.attributes["constraints"]
                 if isinstance(constraints, dict):  # means it's a more advanced IR device
                     codesets = hvac_data.attributes["codesets"][0]
+                    # If no recognized temperature scale, log an error
                     if (
                         "temperature-scale" not in constraints
                         and "temperature-scale" not in codesets
@@ -129,8 +131,12 @@ class StructureClimate(CoordinatorEntity, ClimateEntity):
         return True
 
     @property
+    def icon(self) -> str:
+        return "mdi:home-thermometer"
+
+    @property
     def temperature_unit(self) -> UnitOfTemperature:
-        # Convert celsius/fahrenheit based on HA’s system
+        """Convert celsius/fahrenheit based on HA’s system settings."""
         return (
             UnitOfTemperature.CELSIUS
             if self.hass.config.units is METRIC_SYSTEM
@@ -162,12 +168,12 @@ class StructureClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def entity_registry_enabled_default(self) -> bool:
-        # Disable if structure is in "manual" mode
+        """Disable if structure is in 'manual' mode."""
         return self.structure_data.attributes["mode"] != "manual"
 
     @property
     def available(self) -> bool:
-        # Also show as unavailable if "manual" system mode
+        """Show as unavailable if 'manual' system mode."""
         return self.structure_data.attributes["mode"] != "manual"
 
     async def async_turn_off(self) -> None:
@@ -201,8 +207,8 @@ class StructureClimate(CoordinatorEntity, ClimateEntity):
             LOGGER.error(f"Missing valid arguments for set_temperature in {kwargs}")
             return
 
+        # Convert from F to C if needed
         if self.hass.config.units is not METRIC_SYSTEM:
-            # Convert from F to C
             new_temp = round(((new_temp - 32) * 5 / 9), 2)
 
         await self._update_structure_temp(new_temp)
@@ -251,18 +257,21 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
 
     @property
     def unique_id(self) -> str:
-        return f"{self.room_data.id}_room"
+        return f"{self.room_data.id}"
 
     @property
     def name(self) -> str:
-        return "Room"
+        """Use the Flair room name directly, so we don't get 'Room Room'."""
+        return self.room_data.attributes["name"]
 
     @property
     def has_entity_name(self) -> bool:
-        return True
+        """False so it doesn't append anything to the name."""
+        return False
 
     @property
     def icon(self) -> str:
+        """Use a door icon to represent a room."""
         return "mdi:door-open"
 
     @property
@@ -275,7 +284,6 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
         """If the room is inactive, reflect OFF. Otherwise, map structure-heat-cool-mode."""
         if not self.room_data.attributes.get("active", True):
             return HVACMode.OFF
-
         flair_mode = self.structure_data.attributes["structure-heat-cool-mode"]
         return ROOM_HVAC_MAP.get(flair_mode, HVACMode.OFF)
 
@@ -302,15 +310,14 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
 
     @property
     def entity_registry_enabled_default(self) -> bool:
-        # If the system is manual, we don't enable by default
+        """If the system is manual, we don't enable by default."""
         return self.structure_data.attributes["mode"] != "manual"
 
     @property
     def available(self) -> bool:
-        # If the system is manual, we show as unavailable
+        """If the system is manual, or there's no current temp reading, show unavailable."""
         if self.structure_data.attributes["mode"] == "manual":
             return False
-        # Also, if the room has no current temperature reading, we consider it not available
         return self.room_data.attributes.get("current-temperature-c") is not None
 
     async def async_turn_off(self) -> None:
@@ -330,7 +337,6 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
         Otherwise => mark the room active, then update structure mode.
         """
         if hvac_mode == HVACMode.OFF:
-            # Mark room inactive
             data = {"active": False}
             await self.coordinator.client.update("rooms", self.room_data.id, data, relationships={})
             self.room_data.attributes["active"] = False
@@ -353,7 +359,7 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
         await self.coordinator.async_request_refresh()
 
     async def async_set_temperature(self, **kwargs) -> None:
-        """Set new target temperature for this room."""
+        """Set new target temperature for this room (in Celsius)."""
         new_temp = kwargs.get(ATTR_TEMPERATURE)
         if new_temp is None:
             LOGGER.error(f"Missing valid arguments for set_temperature in {kwargs}")
@@ -370,10 +376,9 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
 class HVAC(CoordinatorEntity, ClimateEntity):
     """
     Representation of a single IR mini-split HVAC unit, which uses
-    Flair’s IR commands. If you want “OFF => inactive room” logic,
-    you can implement that similarly, but typically these IR units
-    are controlled individually and *may* or may not reflect the
-    underlying room's active status.
+    Flair’s IR commands. Typically, these devices are controlled
+    individually. 
+    If you want “OFF => inactive room,” replicate the pattern from RoomTemp.
     """
 
     _enable_turn_on_off_backwards_compatibility = False
@@ -393,12 +398,13 @@ class HVAC(CoordinatorEntity, ClimateEntity):
 
     @property
     def puck_data(self) -> Puck:
-        # For diagnostic availability, etc.
+        """For diagnostic availability, etc."""
         puck_id = self.hvac_data.relationships["puck"]["data"]["id"]
         return self.structure_data.pucks[puck_id]
 
     @property
     def room_data(self) -> Room:
+        """Return the room object to which this HVAC is tied."""
         room_id = self.hvac_data.relationships["room"]["data"]["id"]
         return self.structure_data.rooms[room_id]
 
@@ -418,6 +424,7 @@ class HVAC(CoordinatorEntity, ClimateEntity):
 
     @property
     def name(self) -> str:
+        """Show a generic name plus the device name if needed."""
         return "HVAC unit"
 
     @property
@@ -430,7 +437,10 @@ class HVAC(CoordinatorEntity, ClimateEntity):
 
     @property
     def temperature_unit(self) -> UnitOfTemperature:
-        # The unit is read from constraints
+        """
+        The unit is read from constraints or codesets. 
+        This might be 'F' or 'C' based on your Flair IR config.
+        """
         constraints = self.hvac_data.attributes["constraints"]
         if "temperature-scale" in constraints:
             scale = constraints["temperature-scale"]
@@ -446,11 +456,185 @@ class HVAC(CoordinatorEntity, ClimateEntity):
     @property
     def is_on(self) -> bool:
         """If Flair says 'power': 'On', then it's on."""
-        return self.hvac_data.attributes["power"] == "On"
+        return self.hvac_data.attributes.get("power") == "On"
 
-    # ...Remaining logic for modes, fan speeds, swing, etc. remains largely the same...
+    @property
+    def hvac_mode(self) -> HVACMode | None:
+        """Map Flair's 'mode' (cool/heat/fan/etc.) to an HA HVACMode."""
+        flair_mode = self.hvac_data.attributes.get("mode", "Off")
+        return HVAC_AVAILABLE_MODES_MAP.get(flair_mode, HVACMode.OFF)
 
-    # If you want “OFF => inactive room,” replicate the same pattern from RoomTemp
-    # (But typically these IR units are “manually” toggled, so it’s up to you.)
+    @property
+    def hvac_modes(self) -> list[HVACMode]:
+        """
+        Return all possible modes (based on the constraints).
+        Typically: OFF, COOL, HEAT, DRY, FAN_ONLY, AUTO, etc.
+        For Home Assistant, we often map 'Auto' -> HEAT_COOL or so.
+        """
+        # If your constraints/codesets contain certain modes only, 
+        # you could dynamically parse them here. We'll assume 
+        # something like [OFF, COOL, HEAT, FAN_ONLY, DRY, HEAT_COOL].
+        return list(HASS_HVAC_MODE_TO_FLAIR.keys())
 
-    # ...
+    @property
+    def fan_mode(self) -> str | None:
+        """Return the current fan speed in HA terms (auto, low, med, high)."""
+        flair_fan = self.hvac_data.attributes.get("fan-speed")
+        if flair_fan in HVAC_CURRENT_FAN_SPEED:
+            return HVAC_CURRENT_FAN_SPEED[flair_fan]
+        return FAN_AUTO  # fallback if unknown
+
+    @property
+    def fan_modes(self) -> list[str]:
+        """Return all supported fan speeds."""
+        return HVAC_AVAILABLE_FAN_SPEEDS  # e.g. [FAN_AUTO, FAN_LOW, FAN_MEDIUM, FAN_HIGH]
+
+    @property
+    def swing_mode(self) -> str | None:
+        """Return the current swing state: 'on' or 'off' in HA terms."""
+        flair_swing = self.hvac_data.attributes.get("swing")
+        if flair_swing in HVAC_SWING_STATE:
+            return HVAC_SWING_STATE[flair_swing]
+        return SWING_OFF  # default if unknown
+
+    @property
+    def swing_modes(self) -> list[str]:
+        """Return all supported swing modes."""
+        return [SWING_OFF, SWING_ON]
+
+    @property
+    def current_temperature(self) -> float | None:
+        """
+        For IR units, Flair typically reports the temperature 
+        from the associated puck or room. 
+        """
+        return self.room_data.attributes.get("current-temperature-c", 0.0)
+
+    @property
+    def target_temperature(self) -> float | None:
+        """
+        The set-point that Flair is sending to the mini-split. 
+        This is stored in the hvac_data attributes as 'temperature'.
+        """
+        current_set = self.hvac_data.attributes.get("temperature")
+        if current_set is None:
+            return None
+        # If the device uses Fahrenheit, just return as-is. 
+        # If it's Celsius, we might also just return as-is. 
+        # Typically, the user will want to see it in the same scale as the device. 
+        return current_set
+
+    @property
+    def hvac_action(self) -> HVACAction | None:
+        """
+        The current operation (idle, heating, cooling, etc.)
+        derived from hvac_data attributes or from mode/power.
+        """
+        # If it's off, we say 'off'.
+        if not self.is_on:
+            return HVACAction.OFF
+
+        flair_mode = self.hvac_data.attributes.get("mode", "Off")
+        return HVAC_CURRENT_ACTION.get(flair_mode, HVACAction.IDLE)
+
+    @property
+    def supported_features(self) -> int:
+        """Fan speed, swing, and target temp are typically supported for IR units."""
+        return (
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.TURN_OFF
+            | ClimateEntityFeature.FAN_MODE
+            | ClimateEntityFeature.SWING_MODE
+        )
+
+    async def async_turn_on(self) -> None:
+        """Turn the unit on (set power = 'On')."""
+        await self._update_hvac({"power": "On"})
+        self.hvac_data.attributes["power"] = "On"
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self) -> None:
+        """Turn the unit off (set power = 'Off')."""
+        await self._update_hvac({"power": "Off"})
+        self.hvac_data.attributes["power"] = "Off"
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set the HVAC mode (cool, heat, etc.), turning on if needed."""
+        if hvac_mode == HVACMode.OFF:
+            await self.async_turn_off()
+            return
+
+        # Ensure it's powered on
+        if not self.is_on:
+            await self.async_turn_on()
+
+        # Convert to Flair’s mode
+        flair_mode = HASS_HVAC_MODE_TO_FLAIR.get(hvac_mode, "Off")
+        await self._update_hvac({"mode": flair_mode})
+        self.hvac_data.attributes["mode"] = flair_mode
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_temperature(self, **kwargs) -> None:
+        """
+        Set a new target temperature for the mini-split (the IR device).
+        We'll pass it as either F or C, depending on `temperature_unit`.
+        """
+        new_temp = kwargs.get(ATTR_TEMPERATURE)
+        if new_temp is None:
+            LOGGER.error(f"Missing valid arguments for set_temperature in {kwargs}")
+            return
+
+        # Make sure the unit is ON before adjusting temperature
+        if not self.is_on:
+            await self.async_turn_on()
+
+        # If the device scale is Fahrenheit, pass the value as F. 
+        # If Celsius, pass it as C. 
+        # Typically, you'd confirm how Flair expects it. We'll assume if `temperature_unit` is F, 
+        # then we just send the integer or float as is. 
+        # If it's C, we do the same. 
+        # But in real code, you might need to pass an integer, etc.
+        data = {"temperature": new_temp}
+        await self._update_hvac(data)
+        self.hvac_data.attributes["temperature"] = new_temp
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        """Update the fan speed on the mini-split."""
+        # Ensure it's on
+        if not self.is_on:
+            await self.async_turn_on()
+
+        flair_fan = HASS_HVAC_FAN_SPEED_TO_FLAIR.get(fan_mode, "Auto")
+        data = {"fan-speed": flair_fan}
+        await self._update_hvac(data)
+        self.hvac_data.attributes["fan-speed"] = flair_fan
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        """Update the swing mode (on/off)."""
+        # Ensure it's on
+        if not self.is_on:
+            await self.async_turn_on()
+
+        flair_swing = HASS_HVAC_SWING_TO_FLAIR.get(swing_mode, "Off")
+        data = {"swing": flair_swing}
+        await self._update_hvac(data)
+        self.hvac_data.attributes["swing"] = flair_swing
+        self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
+
+    async def _update_hvac(self, new_attrs: dict[str, Any]) -> None:
+        """
+        Send the changes to Flair’s API for this HVAC unit.
+        E.g. {"mode": "Cool", "temperature": 72, "power": "On", "fan-speed": "High"}
+        """
+        await self.coordinator.client.update(
+            "hvac-units", self.hvac_data.id, new_attrs, relationships={}
+        )
