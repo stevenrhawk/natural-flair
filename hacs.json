@@ -1,8 +1,8 @@
 {
-  "name": "Flair",
+  "name": "Natural Flair",
   "render_readme": true,
   "country": "US",
   "homeassistant": "2024.2.0b0",
   "zip_release": true,
-  "filename": "flair.zip"
+  "filename": "naturalflair.zip"
 }
