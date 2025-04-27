@@ -173,3 +173,33 @@ Each IR HVAC unit has the following entities:
 
 For these HVAC units `button` entities are created depending on what control is available (Temp +, Temp -, Fan +, Fan -, etc).
 In addition, a `Last button pressed` `sensor` entity is created showing the last command sent to the HVAC unit by Flair. By default, if the Flair API doesn't return a value for the last button pressed, the sensor will have a state of `No button pressed`.
+
+## How This Fork Differs from Upstream
+
+This project is a fork of the [upstream Flair Home Assistant Integration](https://github.com/RobertD502/home-assistant-flair). The most significant differences are in how **climate entities** (Structure, Room, HVAC) are handled:
+
+### Climate Entity Differences
+
+- **Room Activation/Inactivation:**
+  - **This fork:** Setting a room climate entity to 'off' or changing its HVAC mode updates the *structure's* `structure-heat-cool-mode` (i.e., the system-wide mode), rather than just toggling the room's `active` status. This means room-level changes can affect the entire system's mode.
+  - **Upstream:** Setting a room to 'off' typically only marks the room as inactive (by toggling its `active` attribute), without changing the structure's mode for all rooms.
+
+- **Temperature and Mode Changes:**
+  - **This fork:** Changing the temperature or HVAC mode on a room or HVAC entity may propagate changes to the structure or use structure-level update calls, ensuring system-wide consistency. For example, setting a room's temperature or mode may update the structure's setpoint or mode, not just the room's attributes.
+  - **Upstream:** Room and HVAC entities generally update only their own attributes (e.g., room setpoint or HVAC mode) without affecting the structure unless explicitly required by Flair's API.
+
+- **Error Handling and Logging:**
+  - **This fork:** Includes more explicit error handling and logging for unsupported operations (e.g., trying to set a temperature when the setpoint controller is not the Flair app, or when the HVAC is off in manual mode). Users receive clearer feedback when an operation is not allowed.
+  - **Upstream:** May have less detailed error messages or allow some operations to silently fail or be ignored.
+
+- **Feature Exposure:**
+  - **This fork:** Exposes additional Home Assistant properties (like temperature step, min/max setpoints) and may have more restrictive or explicit feature support depending on system mode (manual vs auto).
+  - **Upstream:** May expose a different set of features or allow more granular room-level control without propagating changes to the structure.
+
+- **General Philosophy:**
+  - **This fork:** Prioritizes system-wide consistency and explicit user feedback, even if it means room-level changes affect the whole system.
+  - **Upstream:** Prioritizes granular, per-room control where possible, with less coupling between room and structure entities.
+
+If you want climate entity changes to always reflect and potentially affect the entire Flair system, this fork is for you. If you prefer more independent, per-room control, the upstream project may be a better fit.
+
+
