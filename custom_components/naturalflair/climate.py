@@ -119,7 +119,7 @@ class StructureClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def unique_id(self) -> str:
-        return f"{self.structure_data.id}_climate"
+        return str(self.structure_data.id)
 
     @property
     def name(self) -> str:
@@ -207,9 +207,11 @@ class StructureClimate(CoordinatorEntity, ClimateEntity):
         self.async_write_ha_state()
         return await self.coordinator.async_request_refresh()
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode | str) -> None:
-        """Set new target hvac mode."""
+    async def async_set_hvac_mode(self, hvac_mode) -> None:
         flair_mode = ROOM_HVAC_MAP_TO_FLAIR.get(hvac_mode)
+        if flair_mode is None:
+            LOGGER.error(f"StructureClimate: Unsupported hvac_mode '{hvac_mode}' (no Flair mapping). Not sending update.")
+            return
         attributes = self.set_attributes(flair_mode, 'hvac_mode')
         await self.coordinator.client.update('structures', self.structure_data.id, attributes=attributes, relationships={})
         self.structure_data.attributes['structure-heat-cool-mode'] = flair_mode
@@ -276,7 +278,7 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
 
     @property
     def unique_id(self) -> str:
-        return str(self.room_data.id) + '_room'
+        return str(self.room_data.id)
 
     @property
     def name(self) -> str:
@@ -354,14 +356,22 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
         self.async_write_ha_state()
         return await self.coordinator.async_request_refresh()
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode | str) -> None:
-        """Set new target hvac mode."""
-        flair_mode = ROOM_HVAC_MAP_TO_FLAIR.get(hvac_mode)
-        attributes = self.set_attributes(flair_mode, 'hvac_mode')
-        await self.coordinator.client.update('structures', self.structure_data.id, attributes=attributes, relationships={})
-        self.structure_data.attributes['structure-heat-cool-mode'] = flair_mode
-        self.async_write_ha_state()
-        return await self.coordinator.async_request_refresh()
+    async def async_set_hvac_mode(self, hvac_mode) -> None:
+        if hvac_mode == HVACMode.OFF:
+            data = {"active": False}
+            await self.coordinator.client.update("rooms", self.room_data.id, data, relationships={})
+            self.room_data.attributes["active"] = False
+            self.async_write_ha_state()
+            await self.coordinator.async_request_refresh()
+        elif hvac_mode == HVACMode.AUTO:
+            # Mark room as active, but do not change structure mode
+            if not self.room_data.attributes.get("active", True):
+                await self.coordinator.client.update("rooms", self.room_data.id, {"active": True}, relationships={})
+                self.room_data.attributes["active"] = True
+            self.async_write_ha_state()
+            await self.coordinator.async_request_refresh()
+        else:
+            LOGGER.warning(f"RoomTemp: Unsupported hvac_mode '{hvac_mode}' attempted. Only 'off' and 'auto' are allowed for room entities.")
 
     async def async_set_temperature(self, **kwargs) -> None:
         """Set new target temperature."""
@@ -436,7 +446,7 @@ class HVAC(CoordinatorEntity, ClimateEntity):
 
     @property
     def unique_id(self) -> str:
-        return f"{self.hvac_data.id}_hvac_unit"
+        return str(self.hvac_data.id)
 
     @property
     def name(self) -> str:
@@ -595,68 +605,13 @@ class HVAC(CoordinatorEntity, ClimateEntity):
                 await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode) -> None:
-        """Set new target hvac mode."""
-        # Power off manual HVAC unit
         if hvac_mode == HVACMode.OFF:
-            power_attributes = {"power": "Off"}
-            await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=power_attributes, relationships={})
-            self.hvac_data.attributes['power'] = 'Off'
-        elif self.structure_mode == 'manual':
-            # Turn the HVAC unit on before sending desired mode
-            if not self.is_on:
-                power_attributes = {"power": "On"}
-                await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=power_attributes, relationships={})
-                self.hvac_data.attributes['power'] = 'On'
-
-            mode = HASS_HVAC_MODE_TO_FLAIR.get(hvac_mode)
-
-            if hvac_mode in [HVACMode.DRY, HVACMode.HEAT_COOL]:
-                # When switching to Dry or Heat_Cool (Auto) mode,
-                # a fan speed of Auto is expected
-
-                mode_attributes = self.set_attributes('hvac_mode', mode, False)
-                flair_speed = HASS_HVAC_FAN_SPEED_TO_FLAIR.get(FAN_AUTO)
-                if self.hvac_data.attributes['fan-speed'] != flair_speed:
-                    fan_attributes = self.set_attributes('fan_mode', flair_speed, False)
-                    await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=mode_attributes, relationships={})
-                    await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=fan_attributes, relationships={})
-                    self.hvac_data.attributes['fan-speed'] = flair_speed
-                else:
-                    await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=mode_attributes, relationships={})
-
-                self.hvac_data.attributes['mode'] = mode
-                self.async_write_ha_state()
-                await self.coordinator.async_request_refresh()
-                return None
-
-            if hvac_mode == HVACMode.FAN_ONLY:
-                # When switching to Fan Only mode, Auto fan speed is not valid.
-                # We have to set a non-Auto fan speed if current mode is using
-                # Auto fan speed.
-
-                mode_attributes = self.set_attributes('hvac_mode', mode, False)
-                if self.hvac_data.attributes['fan-speed'] == "Auto": 
-                    valid_fan_speed = HVAC_AVAILABLE_FAN_SPEEDS[self.fan_only_fan_speeds[0]]
-                    flair_speed = HASS_HVAC_FAN_SPEED_TO_FLAIR.get(valid_fan_speed)
-                    fan_attributes = self.set_attributes('fan_mode', flair_speed, False)
-                    await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=mode_attributes, relationships={})
-                    await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=fan_attributes, relationships={})
-                    self.hvac_data.attributes['fan-speed'] = flair_speed
-                else:
-                    await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=mode_attributes, relationships={})
-                self.hvac_data.attributes['mode'] = mode
-                self.async_write_ha_state()
-                await self.coordinator.async_request_refresh()
-                return None
-
-            # Handle all other HVAC modes
-            attributes = self.set_attributes('hvac_mode', mode, False)
-            await self.coordinator.client.update('hvac-units', self.hvac_data.id, attributes=attributes, relationships={})
-            self.hvac_data.attributes['mode'] = mode
+            await self.async_turn_off()
+        elif hvac_mode == HVACMode.AUTO:
+            # No-op: just mirror structure's mode, do not send to API
+            self.async_write_ha_state()
         else:
-            return None
-        self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
+            LOGGER.warning(f"HVAC: Unsupported hvac_mode '{hvac_mode}' attempted. Only 'off' and 'auto' are allowed for HVAC entities.")
 
     async def async_set_fan_mode(self, fan_mode) -> None:
         """Set new target fan mode."""

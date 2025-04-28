@@ -1,26 +1,50 @@
-name: "Release"
+name: "Auto Release"
 
 on:
-  release:
-    types: [published, edited]
+  push:
+    branches:
+      - main
 
 permissions: {}
 
 jobs:
   release:
-    name: "Release"
+    name: "Auto Release"
     runs-on: "ubuntu-latest"
     permissions:
       contents: write
     steps:
       - name: "Checkout the repository"
-        uses: "actions/checkout@v3.5.3"
+        uses: actions/checkout@v3.5.3
 
-      - name: "Adjust version number"
-        shell: "bash"
+      - name: "Install yq and jq"
         run: |
-          yq -i -o json '.version="${{ github.event.release.tag_name }}"' \
-            "${{ github.workspace }}/custom_components/naturalflair/manifest.json"
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: "Read and bump version"
+        id: bump_version
+        run: |
+          # Read current version from manifest.json
+          CURRENT_VERSION=$(jq -r '.version' custom_components/naturalflair/manifest.json)
+          echo "Current version: $CURRENT_VERSION"
+
+          # Split version into parts
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+
+          # Increment patch version
+          PATCH=$((PATCH + 1))
+
+          # Construct new version
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "New version: $NEW_VERSION"
+
+          # Save new version to env
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_ENV"
+
+          # Update manifest.json
+          jq --arg v "$NEW_VERSION" '.version=$v' custom_components/naturalflair/manifest.json > manifest_tmp.json
+          mv manifest_tmp.json custom_components/naturalflair/manifest.json
 
       - name: "ZIP the integration directory"
         shell: "bash"
@@ -28,8 +52,9 @@ jobs:
           cd "${{ github.workspace }}/custom_components/naturalflair"
           zip naturalflair.zip -r ./
 
-      - name: "Upload the ZIP file to the release"
+      - name: "Create GitHub Release and upload ZIP"
         uses: softprops/action-gh-release@v0.1.15
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: "v${{ env.new_version }}"
+          name: "Release v${{ env.new_version }}"
           files: ${{ github.workspace }}/custom_components/naturalflair/naturalflair.zip
