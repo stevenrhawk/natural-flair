@@ -17,7 +17,7 @@ jobs:
       - name: "Checkout the repository"
         uses: actions/checkout@v3.5.3
 
-      - name: "Install yq and jq"
+      - name: "Install jq"
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
@@ -25,36 +25,51 @@ jobs:
       - name: "Read and bump version"
         id: bump_version
         run: |
-          # Read current version from manifest.json
+          # Read the current version from manifest.json
           CURRENT_VERSION=$(jq -r '.version' custom_components/naturalflair/manifest.json)
           echo "Current version: $CURRENT_VERSION"
 
-          # Split version into parts
+          # Split into major, minor, patch
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
-          # Increment patch version
+          # Increment patch
           PATCH=$((PATCH + 1))
 
-          # Construct new version
+          # Create new version
           NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           echo "New version: $NEW_VERSION"
 
-          # Save new version to env
+          # Save to environment
           echo "new_version=$NEW_VERSION" >> "$GITHUB_ENV"
 
           # Update manifest.json
           jq --arg v "$NEW_VERSION" '.version=$v' custom_components/naturalflair/manifest.json > manifest_tmp.json
           mv manifest_tmp.json custom_components/naturalflair/manifest.json
 
-      - name: "ZIP the integration directory"
-        shell: "bash"
+      - name: "ZIP the updated integration directory"
         run: |
           cd "${{ github.workspace }}/custom_components/naturalflair"
           zip naturalflair.zip -r ./
+
+      - name: "Get last commit message"
+        id: last_commit
+        run: |
+          COMMIT_MESSAGE=$(git log -1 --pretty=format:"%s")
+          echo "commit_message=$COMMIT_MESSAGE" >> "$GITHUB_ENV"
 
       - name: "Create GitHub Release and upload ZIP"
         uses: softprops/action-gh-release@v0.1.15
         with:
           tag_name: "v${{ env.new_version }}"
           name: "Release v${{ env.new_version }}"
+          body: "${{ env.commit_message }}"
           files: ${{ github.workspace }}/custom_components/naturalflair/naturalflair.zip
+
+      - name: "Commit updated manifest.json back to repo"
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/naturalflair/manifest.json
+          git commit -m "chore: bump version to v${{ env.new_version }}"
+          git push
