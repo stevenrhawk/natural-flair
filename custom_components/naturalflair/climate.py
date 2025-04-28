@@ -282,8 +282,7 @@ class RoomTemp(CoordinatorEntity, ClimateEntity):
 
     @property
     def name(self) -> str:
-        """Return name of the entity."""
-        return "Room"
+        return self.room_data.attributes["name"]
 
     @property
     def has_entity_name(self) -> bool:
@@ -450,8 +449,7 @@ class HVAC(CoordinatorEntity, ClimateEntity):
 
     @property
     def name(self) -> str:
-        """Show a generic name plus the device name if needed."""
-        return "HVAC unit"
+        return self.hvac_data.attributes["name"]
 
     @property
     def has_entity_name(self) -> bool:
